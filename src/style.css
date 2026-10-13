@@ -1,0 +1,1251 @@
+/* ============================================================
+   字体：由 src/composables/useFonts.ts 自动扫描 asset/fonts/ 并注入 @font-face
+   （英文 / 中文可在右上角「字体」按钮里分别设置）
+   此处只保留变量兜底：JS 未运行或注入前回退系统字体。
+   ============================================================ */
+/* ============================================================
+   设计令牌 —— 冷调极简（Notion / Linear 风格）
+   ============================================================ */
+:root {
+  color-scheme: light;
+
+  /* 背景 */
+  --bg-canvas: #e7e8ea; /* 新拟态基底（暖灰，替代纯白） */
+  --bg-sidebar: #dcdee1;
+  --bg-hover: rgba(24, 26, 30, 0.05);
+  --bg-active: rgba(24, 26, 30, 0.09);
+  --bg-soft: #eef0f2;
+
+  /* 边框 */
+  --border: #d3d5da;
+  --border-strong: #c1c4cb;
+
+  /* 文字（取自 Notion 的墨色阶） */
+  --text-strong: #37352f;
+  --text-mid: #6f6d67;
+  --text-faint: #a09ea2;
+
+  /* 强调色（克制的蓝） */
+  --accent: #2563eb;
+  --accent-hover: #1e51c9;
+  --accent-soft: rgba(37, 99, 235, 0.08);
+
+  /* 危险色 */
+  --danger: #d33d3d;
+  --danger-soft: rgba(211, 61, 61, 0.08);
+
+  /* 成功色 */
+  --success: #0e9f6e;
+
+  /* 形状与阴影 */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  /* 浮层（下拉/面板） */
+  --shadow-pop: 12px 12px 26px rgba(95, 100, 110, 0.3), -10px -10px 22px rgba(255, 255, 255, 0.85);
+  /* 新拟态：凸起 / 凹陷 阴影 */
+  --neu-raise: 5px 5px 12px rgba(95, 100, 110, 0.3), -5px -5px 12px rgba(255, 255, 255, 0.9);
+  --neu-raise-sm: 3px 3px 7px rgba(95, 100, 110, 0.26), -3px -3px 7px rgba(255, 255, 255, 0.85);
+  --neu-sink: inset 3px 3px 7px rgba(95, 100, 110, 0.24), inset -3px -3px 7px rgba(255, 255, 255, 0.9);
+  --neu-sink-sm: inset 2px 2px 5px rgba(95, 100, 110, 0.22), inset -2px -2px 5px rgba(255, 255, 255, 0.85);
+
+  /* 全局界面字体：中英文统一本地苹方 PingFang SC（自托管 6 字重）；系统字体兜底 */
+  --font-sans:
+    'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* 等宽字体（代码块 / 行内代码）：英文 Menlo（自托管），代码内中文兜底苹方 */
+  --font-mono: 'Menlo', ui-monospace, 'SF Mono', 'Cascadia Code', Consolas,
+    'PingFang SC', monospace;
+  /* 编辑器正文：英文/数字与中文分别由变量决定（右上角「字体」按钮可切换） */
+  --font-latin: 'Menlo';
+  --font-cjk: 'PingFang SC';
+  --font-content:
+    var(--font-latin), var(--font-cjk), -apple-system, 'Segoe UI',
+    'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+/* ============================================================
+   基础重置
+   ============================================================ */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+/* 页面最小宽度：窄于该值时整体横向滚动，避免布局挤压 */
+#app {
+  min-width: 720px;
+}
+
+/* ============================================================
+   打印 / 导出 PDF：只输出当前笔记的纸张卡片
+   ============================================================ */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  /* 规范纸张与边距（页眉/页脚由浏览器打印对话框控制） */
+  @page {
+    size: A4;
+    margin: 14mm 16mm;
+  }
+  /* 只保留正文；隐藏一切 UI、标题输入框与左侧目录树 */
+  .appbar,
+  .fmtline,
+  .page__foot,
+  .title,
+  .toast-slot,
+  .outline-slot,
+  .outline,
+  .welcome {
+    display: none !important;
+  }
+  html,
+  body,
+  #app,
+  .app,
+  .editor {
+    height: auto !important;
+    background: #fff !important;
+  }
+  .app {
+    display: block !important;
+  }
+  .editor {
+    display: block !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .editor__body {
+    height: auto;
+    overflow: visible;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  /* 卡片完全摊开：无阴影、无圆角、无内外两层留白（!important 压过 scoped 样式） */
+  .page {
+    margin: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+    height: auto !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    padding: 0 !important;
+  }
+  .page__content {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+  .note-content {
+    background: #fff !important;
+  }
+  .note-content p,
+  .note-content h1,
+  .note-content h2,
+  .note-content h3,
+  .note-content h4,
+  .note-content h5,
+  .note-content li,
+  .note-content pre {
+    break-inside: avoid;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-strong);
+  background: var(--bg-canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+input,
+textarea {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* 仅编辑器内部允许光标选择文本，其它 UI 文本禁止选中 */
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+.note-content,
+.note-content *,
+[contenteditable='true'],
+[contenteditable='true'] * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+::selection {
+  background: var(--selection-bg);
+}
+
+/* 细滚动条 */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scroll-thumb);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scroll-thumb-hover);
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ============================================================
+   共享控件基元
+   ============================================================ */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-mid);
+  cursor: pointer;
+  transition:
+    box-shadow 0.16s ease,
+    background-color 0.16s ease,
+    color 0.16s ease;
+}
+.icon-btn:hover:not(:active):not(:disabled) {
+  background: rgba(255, 255, 255, 0.3);
+  box-shadow: var(--neu-raise-sm);
+  color: var(--text-strong);
+}
+.icon-btn:active:not(:disabled) {
+  box-shadow: var(--neu-sink-sm);
+  background: transparent;
+}
+.icon-btn.danger:hover:not(:active):not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 主按钮（灰底浮雕；用于「新建」等主操作） */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg-canvas);
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 550;
+  padding: 7px 16px;
+  cursor: pointer;
+  box-shadow: var(--neu-raise-sm);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.05s ease;
+}
+.btn-primary:hover:not(:active):not(:disabled) {
+  background: rgba(255, 255, 255, 0.4);
+  color: var(--text-strong);
+  box-shadow: var(--neu-raise);
+}
+.btn-primary:active {
+  box-shadow: var(--neu-sink);
+}
+
+/* 次级文字按钮（灰底浮雕） */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--bg-canvas);
+  color: var(--text-mid);
+  font-size: 13px;
+  padding: 6px 13px;
+  cursor: pointer;
+  box-shadow: var(--neu-raise-sm);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.btn-ghost:hover:not(:active):not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+  color: var(--text-strong);
+}
+.btn-ghost:active {
+  box-shadow: var(--neu-sink-sm);
+}
+
+/* 行内迷你按钮（删除确认等） */
+.mini-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 7px;
+  font-size: 12px;
+  padding: 3px 9px;
+  cursor: pointer;
+  background: var(--bg-canvas);
+  color: var(--text-mid);
+  box-shadow: var(--neu-raise-sm);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.mini-btn:hover:not(:active):not(:disabled) {
+  background: rgba(255, 255, 255, 0.3);
+  color: var(--text-strong);
+}
+.mini-btn:active {
+  box-shadow: var(--neu-sink-sm);
+}
+.mini-btn.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  box-shadow: none;
+}
+.mini-btn.danger:hover:not(:active):not(:disabled) {
+  background: rgba(211, 61, 61, 0.16);
+}
+
+/* ============================================================
+   笔记正文：块排版（作用于 contenteditable 内的动态内容）
+   ============================================================ */
+.note-content {
+  font-family: var(--font-content);
+  font-size: 16px;
+  line-height: 1.8;
+  letter-spacing: normal; /* 字距只作用于中文包裹标记 .cjk */
+  color: var(--text-strong);
+  position: relative;
+  word-break: break-word;
+}
+
+.note-content.is-empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: var(--text-faint);
+  pointer-events: none;
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+/* 段落（正文块；变量由 useNoteStyles 实时注入） */
+.note-content p {
+  margin: 0 0 6px;
+}
+.note-content p:empty {
+  margin: 0;
+}
+.note-content > p {
+  --hl-bg: var(--p-bg, transparent); /* 行内底色 */
+  font-size: var(--p-fs, 16px);
+  font-weight: var(--p-fw, 400);
+  line-height: var(--p-lh, 1.8);
+  color: var(--p-color, var(--text-strong));
+  font-style: var(--p-italic, normal);
+  text-decoration-line: var(--p-dec, none);
+  --cjk-ls: var(--p-ls, 0.005em); /* 中文专用字距 */
+  --en-gap: var(--p-en-gap, 0px); /* 英文间距：只给正文段落（标题等其它格式不继承） */
+  text-align: var(--p-align, left);
+  text-indent: var(--p-indent, 0em);
+  margin-bottom: var(--p-mb, 0px);
+}
+.note-content > p:empty {
+  /* 空的占位段落不参与段间距，保持紧凑 */
+  margin-bottom: 0;
+}
+
+/* 标题（h1~h5 块；变量由 useNoteStyles 实时注入） */
+.note-content h1 {
+  --hl-bg: var(--h1-bg, transparent); /* 行内底色 */
+    font-size: var(--h1-fs, 26px);
+  font-weight: var(--h1-fw, 700);
+  line-height: var(--h1-lh, 1.4);
+  color: var(--h1-color, var(--text-strong));
+  font-style: var(--h1-italic, normal);
+  text-decoration-line: var(--h1-dec, none);
+  --cjk-ls: var(--h1-ls, -0.012em); /* 中文专用字距 */
+  text-align: var(--h1-align, left);
+  text-indent: var(--h1-indent, 0em);
+  margin: 0.9em 0 var(--h1-mb, 10px);
+}
+.note-content h2 {
+  --hl-bg: var(--h2-bg, transparent); /* 行内底色 */
+    font-size: var(--h2-fs, 22px);
+  font-weight: var(--h2-fw, 650);
+  line-height: var(--h2-lh, 1.4);
+  color: var(--h2-color, var(--text-strong));
+  font-style: var(--h2-italic, normal);
+  text-decoration-line: var(--h2-dec, none);
+  --cjk-ls: var(--h2-ls, -0.012em); /* 中文专用字距 */
+  text-align: var(--h2-align, left);
+  text-indent: var(--h2-indent, 0em);
+  margin: 0.85em 0 var(--h2-mb, 8px);
+}
+.note-content h3 {
+  --hl-bg: var(--h3-bg, transparent); /* 行内底色 */
+    font-size: var(--h3-fs, 19px);
+  font-weight: var(--h3-fw, 620);
+  line-height: var(--h3-lh, 1.4);
+  color: var(--h3-color, var(--text-strong));
+  font-style: var(--h3-italic, normal);
+  text-decoration-line: var(--h3-dec, none);
+  --cjk-ls: var(--h3-ls, -0.012em); /* 中文专用字距 */
+  text-align: var(--h3-align, left);
+  text-indent: var(--h3-indent, 0em);
+  margin: 0.8em 0 var(--h3-mb, 6px);
+}
+.note-content h4 {
+  --hl-bg: var(--h4-bg, transparent); /* 行内底色 */
+    font-size: var(--h4-fs, 17px);
+  font-weight: var(--h4-fw, 600);
+  line-height: var(--h4-lh, 1.45);
+  color: var(--h4-color, var(--text-strong));
+  font-style: var(--h4-italic, normal);
+  text-decoration-line: var(--h4-dec, none);
+  --cjk-ls: var(--h4-ls, -0.008em); /* 中文专用字距 */
+  text-align: var(--h4-align, left);
+  text-indent: var(--h4-indent, 0em);
+  margin: 0.8em 0 var(--h4-mb, 5px);
+}
+.note-content h5 {
+  --hl-bg: var(--h5-bg, transparent); /* 行内底色 */
+    font-size: var(--h5-fs, 15.5px);
+  font-weight: var(--h5-fw, 560);
+  line-height: var(--h5-lh, 1.5);
+  color: var(--h5-color, var(--text-strong));
+  font-style: var(--h5-italic, normal);
+  text-decoration-line: var(--h5-dec, none);
+  --cjk-ls: var(--h5-ls, -0.005em); /* 中文专用字距 */
+  text-align: var(--h5-align, left);
+  text-indent: var(--h5-indent, 0em);
+  margin: 0.75em 0 var(--h5-mb, 4px);
+}
+/* 行内底色：只覆盖文字范围（由编辑器的 <span class="hl"> 包裹实现），带圆角与内边距 */
+.note-content .hl {
+  background-color: var(--hl-bg, transparent);
+  border-radius: 5px;
+  /* 上下给足内边距，色块比文字高一些；左右外扩后由负外边距抵消，文字位置不变 */
+  padding: 0.18em 0.34em;
+  margin: 0 -0.34em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone; /* 跨行时每行都保留圆角 */
+}
+
+/* 中文专用字距：只有渲染层包裹的中文片段应用字距，英文/数字/符号不受影响 */
+.note-content .cjk {
+  letter-spacing: var(--cjk-ls, 0em);
+}
+/* 英文单词间隔：只作用于正文段落与列表项内容
+   （只在 --en-gap 有定义的块里生效：标题、行内代码、代码块不受影响） */
+.note-content .latin--gap-l {
+  margin-left: var(--en-gap, 0px);
+}
+.note-content .latin--gap-r {
+  margin-right: var(--en-gap, 0px);
+}
+
+.note-content > h1:first-child,
+.note-content > h2:first-child,
+.note-content > h3:first-child,
+.note-content > h4:first-child,
+.note-content > h5:first-child {
+  margin-top: 0.3em;
+}
+
+/* 代码块：基础排版（外观由 .code-* 预设类决定，见下方“代码块外观预设”） */
+.note-content pre {
+  margin: 0.7em 0;
+  padding: 14px 16px;
+  background: #f7f7f5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--code-fs, 13px);
+  font-weight: var(--code-fw, 400);
+  line-height: var(--code-lh, 1.7);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-strong);
+}
+
+/* ---------- 表格（内置样式；边框色 / 表头底色可在样式配置里改） ---------- */
+
+.note-content table {
+  width: 100%;
+  margin: 0.75em 0;
+  /* separate + spacing 0：单元格才会吃 border-radius；
+     边框全部由单元格绘制，圆角处边框才会跟着一起弯 */
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+.note-content th,
+.note-content td {
+  padding: 0.45em 0.7em;
+  border-top: 1px solid var(--table-border, #d8d9dc);
+  border-left: 1px solid var(--table-border, #d8d9dc);
+  vertical-align: top;
+  text-align: left;
+  font-size: var(--p-fs, 16px);
+  line-height: 1.65;
+  letter-spacing: var(--p-ls, 0.005em);
+  word-break: break-word;
+}
+
+/* 右边界由最后一列画，下边界由最后一行画 */
+.note-content tr > *:last-child {
+  border-right: 1px solid var(--table-border, #d8d9dc);
+}
+.note-content tr:last-child > * {
+  border-bottom: 1px solid var(--table-border, #d8d9dc);
+}
+
+.note-content th {
+  background: var(--table-head-bg, #f0f0f2);
+  font-weight: 600;
+}
+
+/* ---------- 列宽拖拽（拖列分界线，右侧相邻列等量补偿） ---------- */
+/* 指针落在列分界线上：显示可拖拽光标 */
+.note-content th.is-col-resize,
+.note-content td.is-col-resize {
+  cursor: col-resize;
+}
+/* 拖拽中的列：右边界画一条强调线，提示正在调这一列 */
+.note-content th.is-col-dragging,
+.note-content td.is-col-dragging {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+/* 拖拽期间：全局统一光标并禁止选中文字（压过 .note-content * 的 user-select: text） */
+body.is-col-resizing,
+body.is-col-resizing * {
+  cursor: col-resize !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* 表格四角保持直角（与单元格边框一致，不留圆角） */
+
+/* ---------- 代码块语法高亮（Prism token；仅渲染层，不入存储） ---------- */
+/* 浅色代码块配色：关键字/函数/字符串/数字/常量/参数/属性/类名/运算符/正则 各自成色 */
+.note-content pre .token.comment,
+.note-content pre .token.prolog,
+.note-content pre .token.doctype,
+.note-content pre .token.cdata {
+  color: #6f8f6a;
+  font-style: italic;
+}
+.note-content pre .token.keyword,
+.note-content pre .token.control,
+.note-content pre .token.directive,
+.note-content pre .token.atrule,
+.note-content pre .token.module {
+  color: #a626a4;
+  font-weight: 600;
+}
+.note-content pre .token.string,
+.note-content pre .token.char,
+.note-content pre .token.attr-value,
+.note-content pre .token.template-string,
+.note-content pre .token.inserted {
+  color: #2f9e44;
+}
+.note-content pre .token.number,
+.note-content pre .token.boolean,
+.note-content pre .token.constant,
+.note-content pre .token.symbol {
+  color: #b45309;
+}
+.note-content pre .token.function,
+.note-content pre .token.method {
+  color: #4078f2;
+}
+.note-content pre .token.class-name,
+.note-content pre .token.maybe-class-name,
+.note-content pre .token.regex,
+.note-content pre .token.important {
+  /* 类名稍加重量，和函数名/关键字拉开辨识度 */
+  font-weight: 600;
+  color: #c18401;
+}
+/* 参数：之前没有配色，会跟正文一样是深灰 */
+.note-content pre .token.parameter {
+  color: #7c4dff;
+}
+/* 属性 / 成员 / 对象字面量键 */
+.note-content pre .token.property,
+.note-content pre .token.literal-property,
+.note-content pre .token.attr-name,
+.note-content pre .token.selector,
+.note-content pre .token.tag,
+.note-content pre .token.builtin {
+  color: #0b6bcb;
+}
+.note-content pre .token.operator,
+.note-content pre .token.entity,
+.note-content pre .token.url,
+.note-content pre .token.interpolation {
+  color: #0184bc;
+}
+.note-content pre .token.punctuation,
+.note-content pre .token.interpolation-punctuation {
+  color: #6b7280;
+}
+/* 兜底：没有被上面任何规则命中的标识符（局部变量、自定义名字） */
+.note-content pre .token.variable {
+  color: #45597e;
+}
+.note-content pre .token.deleted {
+  color: #cf222e;
+}
+.note-content pre .token.bold {
+  font-weight: 700;
+}
+.note-content pre .token.italic {
+  font-style: italic;
+}
+
+/* 深色终端外观下换一套（One Dark 风格） */
+.note-content.code-c pre .token.comment {
+  color: #7f9f6a;
+}
+.note-content.code-c pre .token.keyword {
+  color: #c678dd;
+}
+.note-content.code-c pre .token.string,
+.note-content.code-c pre .token.template-string,
+.note-content.code-c pre .token.attr-value {
+  color: #98c379;
+}
+.note-content.code-c pre .token.number,
+.note-content.code-c pre .token.boolean,
+.note-content.code-c pre .token.constant {
+  color: #d19a66;
+}
+.note-content.code-c pre .token.function,
+.note-content.code-c pre .token.method {
+  color: #61afef;
+}
+.note-content.code-c pre .token.parameter {
+  color: #e5c07b;
+}
+.note-content.code-c pre .token.class-name,
+.note-content.code-c pre .token.maybe-class-name {
+  color: #e3b341;
+}
+.note-content.code-c pre .token.property,
+.note-content.code-c pre .token.literal-property,
+.note-content.code-c pre .token.attr-name {
+  color: #7ee787;
+}
+.note-content.code-c pre .token.operator,
+.note-content.code-c pre .token.interpolation {
+  color: #56b6c2;
+}
+.note-content.code-c pre .token.punctuation {
+  color: #c9d1d9;
+}
+.note-content.code-c pre .token.variable {
+  color: #a9bcd8;
+}
+.note-content.code-c pre .token.builtin {
+  color: #56b6c2;
+}
+.note-content.code-c pre .token.regex,
+.note-content.code-c pre .token.important {
+  color: #ffa657;
+}
+
+/* ---------- 代码块外观预设（样式配置窗口「代码块」页签） ---------- */
+/* 经典：浅灰底 + 1px 细边框 */
+.note-content.code-now pre {
+  background: #f7f7f5;
+  border: 1px solid var(--border);
+}
+/* 内凹：去边框，内侧阴影压入纸面 */
+.note-content.code-a pre {
+  padding: 16px 18px;
+  background: #f6f6f2;
+  border: 0;
+  border-radius: 13px;
+  box-shadow:
+    inset 2px 2px 6px rgba(120, 115, 100, 0.18),
+    inset -2px -2px 6px rgba(255, 255, 255, 0.95);
+}
+/* 强调条：极浅底 + 左侧竖条 + 右侧大圆角 */
+.note-content.code-b pre {
+  padding: 16px 18px 16px 20px;
+  background: #f8f8f5;
+  border: 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px 12px 12px 4px;
+}
+/* 深色终端 */
+.note-content.code-c pre {
+  padding: 16px 18px;
+  background: #21252c;
+  border: 0;
+  border-radius: 12px;
+  color: #e8e9ec;
+  box-shadow: 0 6px 16px rgba(40, 44, 52, 0.28);
+}
+.note-content.code-c pre code {
+  color: inherit;
+}
+/* 细线稿：透明底 + 细边框 */
+.note-content.code-d pre {
+  padding: 16px 18px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: none;
+}
+.note-content pre code {
+  font-family: inherit;
+  font-size: inherit;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+/* 空的代码块也保有一整行高度，光标不会只显示半截 */
+.note-content pre code:empty {
+  display: inline-block;
+  min-width: 1em;
+  min-height: calc(var(--code-lh, 1.7) * 1em);
+}
+
+/* 行内代码 */
+.note-content code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: rgba(55, 53, 47, 0.075);
+  padding: 0.15em 0.42em;
+  border-radius: 5px;
+}
+
+/* 列表 */
+.note-content ul,
+.note-content ol {
+  margin: 0.3em 0;
+  /* 符号/数字列与正文首行缩进对齐：在默认符号列基础上叠加正文首行缩进 */
+  padding-left: calc(var(--p-indent, 0em) + 1em);
+}
+/* 无序圆点占宽更小，单独再收紧（有序数字列保持稍宽） */
+.note-content ul {
+  padding-left: calc(var(--p-indent, 0em) + 0.85em);
+}
+.note-content ol {
+  padding-left: calc(var(--p-indent, 0em) + 1.45em);
+}
+.note-content ul {
+  list-style: disc;
+}
+.note-content ol {
+  list-style: decimal;
+}
+.note-content li {
+  --hl-bg: var(--p-bg, transparent); /* 行内底色 */
+  /* 继承正文排版（行高/字号/字距/颜色/对齐等），仅形态上加前缀 */
+  font-size: var(--p-fs, 16px);
+  font-weight: var(--p-fw, 400);
+  line-height: var(--p-lh, 1.8);
+  color: var(--p-color, var(--text-strong));
+  font-style: var(--p-italic, normal);
+  text-decoration-line: var(--p-dec, none);
+  --cjk-ls: var(--p-ls, 0.005em); /* 中文专用字距 */
+  --en-gap: var(--p-en-gap, 0px); /* 列表项承载正文内容，与正文同样生效 */
+  text-align: var(--p-align, left);
+  margin: 0 0 var(--p-mb, 0px);
+  padding-left: 0.2em;
+}
+.note-content li::marker {
+  color: #000;
+  font-size: 0.8em;
+}
+
+/* 下划线离文字稍远一点 */
+.note-content p,
+.note-content h1,
+.note-content h2,
+.note-content h3,
+.note-content h4,
+.note-content h5,
+.note-content li,
+.note-content u {
+  text-underline-offset: 0.3em;
+}
+.note-content ul ul,
+.note-content ol ul,
+.note-content ul ol,
+.note-content ol ol {
+  margin: 0.1em 0;
+}
+
+/* 前缀随缩进层级同步变化（嵌套更深则换符号/序号体系） */
+.note-content ul ul {
+  list-style: circle;
+}
+.note-content ul ul ul {
+  list-style: square;
+}
+.note-content ol ol {
+  list-style: lower-alpha;
+}
+.note-content ol ol ol {
+  list-style: lower-roman;
+}
+
+/* 分割线 */
+.note-content hr {
+  border: none;
+  border-top: 1px solid var(--border-strong);
+  margin: 1.3em 0;
+}
+
+/* 行内强调 */
+.note-content b,
+.note-content strong {
+  font-weight: bolder;
+}
+.note-content s,
+.note-content strike,
+.note-content del {
+  text-decoration: line-through;
+  color: var(--text-mid);
+}
+.note-content ::selection {
+  background: rgba(37, 99, 235, 0.16);
+}
+
+/* ============================================================
+   按钮按下态 / 常态平滑切换（统一）
+   ============================================================ */
+.btn-primary,
+.btn-ghost,
+.mini-btn,
+.icon-btn {
+  transition:
+    background-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.22s ease,
+    opacity 0.2s ease;
+}
+
+/* ============================================================
+   打印：代码块外观降级（省墨、边界清晰）
+   ============================================================ */
+@media print {
+  /* 表格：允许整表跨页，但单行不要被切开；表头每页重复 */
+  .note-content table {
+    break-inside: auto;
+  }
+  .note-content tr,
+  .note-content th,
+  .note-content td {
+    break-inside: avoid;
+  }
+  .note-content thead {
+    display: table-header-group;
+  }
+  /* 深色终端 → 浅色 */
+  .note-content.code-c pre {
+    background: #f7f7f5;
+    border: 1px solid var(--border);
+    box-shadow: none;
+    color: var(--text-strong);
+  }
+  /* 内凹 → 细边框代替阴影，纸面更清楚 */
+  .note-content.code-a pre {
+    background: #f7f7f5;
+    border: 1px solid var(--border);
+    box-shadow: none;
+  }
+}
+
+/* 打印/导出 PDF：保留底色与代码块外观（浏览器默认会丢弃背景色） */
+@media print {
+  .note-content {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* ============================================================
+   主题变量：原来写死在规则 / 组件里的颜色，抽成变量，供深色主题覆盖
+   ============================================================ */
+:root {
+  /* 选区 / 滚动条 */
+  --selection-bg: rgba(37, 99, 235, 0.16);
+  --scroll-thumb: rgba(24, 26, 30, 0.18);
+  --scroll-thumb-hover: rgba(24, 26, 30, 0.32);
+
+  /* 常规交互高光（浅色下是叠白，深色下改为极弱的叠白） */
+  --surface-hl-soft: rgba(255, 255, 255, 0.25);
+  --surface-hl: rgba(255, 255, 255, 0.32);
+  --surface-hl-strong: rgba(255, 255, 255, 0.5);
+
+  /* 纸张卡片 */
+  --paper-bg: #fffef8;
+  --paper-shadow:
+    18px 18px 36px rgba(95, 100, 110, 0.32),
+    -14px -14px 28px rgba(255, 255, 255, 0.9);
+
+  /* 行内代码 / 代码块（外观预设类据此取色） */
+  --inline-code-bg: rgba(55, 53, 47, 0.075);
+  --code-bg: #f7f7f5;
+  --code-bg-inset: #f6f6f2;
+  --code-inset-shadow:
+    inset 2px 2px 6px rgba(120, 115, 100, 0.18),
+    inset -2px -2px 6px rgba(255, 255, 255, 0.95);
+  --code-bg-accent: #f8f8f5;
+  --code-bg-terminal: #21252c;
+
+  /* 列表符号 */
+  --marker-color: #000;
+
+  /* 样式设置面板：滑块轨道 / 分隔线 / 蓝底按钮文字 */
+  --track-bg: rgba(24, 26, 30, 0.14);
+  --track-inset: inset 0 1px 2px rgba(24, 26, 30, 0.16);
+  --sep-line: rgba(24, 26, 30, 0.09);
+  --on-accent: #fff;
+
+  /* 顶栏操作提示文字 */
+  --msg-success: #14875c;
+  --msg-error: #c73f3a;
+}
+
+/* ============================================================
+   黑夜模式
+   —— 整块包在 @media screen 内：打印 / 导出 PDF 时这些规则不生效，
+      纸张、正文墨色、代码块外观自动回到浅色（用户配置的原样）。
+   ============================================================ */
+@media screen {
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+
+    /* 背景 */
+    --bg-canvas: #1b1e23;
+    --bg-sidebar: #171a1e;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-active: rgba(255, 255, 255, 0.11);
+    --bg-soft: #23272e;
+
+    /* 边框 */
+    --border: #343a43;
+    --border-strong: #454c57;
+
+    /* 文字 */
+    --text-strong: #e7e9ed;
+    --text-mid: #a8afba;
+    --text-faint: #7b828d;
+
+    /* 强调色：深底上略作提亮，保持对比度 */
+    --accent: #6b93f5;
+    --accent-hover: #8aa9f8;
+    --accent-soft: rgba(107, 147, 245, 0.16);
+
+    /* 危险 / 成功 / 顶栏提示 */
+    --danger: #ef6f6f;
+    --danger-soft: rgba(239, 111, 111, 0.16);
+    --success: #3ecf8e;
+    --msg-success: #4ecf9a;
+    --msg-error: #f0827c;
+
+    /* 新拟态：深底上「深投影 + 极弱白光」 */
+    --shadow-pop:
+      12px 12px 26px rgba(0, 0, 0, 0.55),
+      -10px -10px 22px rgba(255, 255, 255, 0.05);
+    --neu-raise:
+      5px 5px 12px rgba(0, 0, 0, 0.5),
+      -5px -5px 12px rgba(255, 255, 255, 0.045);
+    --neu-raise-sm:
+      3px 3px 7px rgba(0, 0, 0, 0.45),
+      -3px -3px 7px rgba(255, 255, 255, 0.04);
+    --neu-sink:
+      inset 3px 3px 7px rgba(0, 0, 0, 0.5),
+      inset -3px -3px 7px rgba(255, 255, 255, 0.05);
+    --neu-sink-sm:
+      inset 2px 2px 5px rgba(0, 0, 0, 0.45),
+      inset -2px -2px 5px rgba(255, 255, 255, 0.045);
+
+    /* 常规交互高光（叠白） */
+    --surface-hl-soft: rgba(255, 255, 255, 0.05);
+    --surface-hl: rgba(255, 255, 255, 0.07);
+    --surface-hl-strong: rgba(255, 255, 255, 0.12);
+
+    /* 纸张：深色纸面 + 深投影 */
+    --paper-bg: #22262c;
+    --paper-shadow:
+      18px 18px 36px rgba(0, 0, 0, 0.55),
+      -14px -14px 28px rgba(255, 255, 255, 0.045);
+
+    /* 选区 / 滚动条 / 滑块轨道 / 分隔线 */
+    --selection-bg: rgba(107, 147, 245, 0.28);
+    --scroll-thumb: rgba(255, 255, 255, 0.18);
+    --scroll-thumb-hover: rgba(255, 255, 255, 0.3);
+    --track-bg: rgba(255, 255, 255, 0.16);
+    --track-inset: inset 0 1px 2px rgba(0, 0, 0, 0.45);
+    --sep-line: rgba(255, 255, 255, 0.1);
+    --on-accent: #10141c;
+
+    /* 行内代码 / 代码块 / 列表符号 */
+    --inline-code-bg: rgba(255, 255, 255, 0.1);
+    --code-bg: #262b32;
+    --code-bg-inset: #20242a;
+    --code-inset-shadow:
+      inset 2px 2px 6px rgba(0, 0, 0, 0.5),
+      inset -2px -2px 6px rgba(255, 255, 255, 0.04);
+    --code-bg-accent: #262b32;
+    /* 深色终端：在深色纸面上要更沉一点才分得出来 */
+    --code-bg-terminal: #15181d;
+    --marker-color: #e7e9ed;
+  }
+
+  /* ---------- 正文 / 标题 / 列表：墨色换用深色适配版 ----------
+     颜色由 useNoteStyles 注入（--p-color 等是原色，--p-color-dark 是深色适配版），
+     这里只决定「深色下读哪个变量」，用户保存的样式配置不受影响 */
+  :root[data-theme='dark'] .note-content > p,
+  :root[data-theme='dark'] .note-content li {
+    color: var(--p-color-dark, var(--p-color, var(--text-strong)));
+  }
+  :root[data-theme='dark'] .note-content h1 {
+    color: var(--h1-color-dark, var(--h1-color, var(--text-strong)));
+  }
+  :root[data-theme='dark'] .note-content h2 {
+    color: var(--h2-color-dark, var(--h2-color, var(--text-strong)));
+  }
+  :root[data-theme='dark'] .note-content h3 {
+    color: var(--h3-color-dark, var(--h3-color, var(--text-strong)));
+  }
+  :root[data-theme='dark'] .note-content h4 {
+    color: var(--h4-color-dark, var(--h4-color, var(--text-strong)));
+  }
+  :root[data-theme='dark'] .note-content h5 {
+    color: var(--h5-color-dark, var(--h5-color, var(--text-strong)));
+  }
+
+  /* ---------- 表格：边框 / 表头底色换用深色适配版 ---------- */
+  :root[data-theme='dark'] .note-content th,
+  :root[data-theme='dark'] .note-content td {
+    border-color: var(--table-border-dark, var(--table-border, #d8d9dc));
+  }
+  :root[data-theme='dark'] .note-content th {
+    background: var(--table-head-bg-dark, var(--table-head-bg, #f0f0f2));
+  }
+
+  /* ---------- 代码块外观预设：深色下换深色底 ---------- */
+  :root[data-theme='dark'] .note-content pre,
+  :root[data-theme='dark'] .note-content.code-now pre {
+    background: var(--code-bg);
+    border-color: var(--border);
+  }
+  :root[data-theme='dark'] .note-content.code-a pre {
+    background: var(--code-bg-inset);
+    box-shadow: var(--code-inset-shadow);
+  }
+  :root[data-theme='dark'] .note-content.code-b pre {
+    background: var(--code-bg-accent);
+  }
+  :root[data-theme='dark'] .note-content.code-c pre {
+    background: var(--code-bg-terminal);
+  }
+  /* 代码块内的 code 不叠行内代码底色 */
+  :root[data-theme='dark'] .note-content pre code {
+    background: transparent;
+  }
+  :root[data-theme='dark'] .note-content code {
+    background: var(--inline-code-bg);
+  }
+  :root[data-theme='dark'] .note-content li::marker {
+    color: var(--marker-color);
+  }
+  :root[data-theme='dark'] .note-content ::selection {
+    background: var(--selection-bg);
+  }
+
+  /* ---------- 语法高亮：浅色配色在深底上换一套亮色（One Dark 风格） ---------- */
+  :root[data-theme='dark'] .note-content pre .token.comment,
+  :root[data-theme='dark'] .note-content pre .token.prolog,
+  :root[data-theme='dark'] .note-content pre .token.doctype,
+  :root[data-theme='dark'] .note-content pre .token.cdata {
+    color: #7f9f6a;
+  }
+  :root[data-theme='dark'] .note-content pre .token.keyword,
+  :root[data-theme='dark'] .note-content pre .token.control,
+  :root[data-theme='dark'] .note-content pre .token.directive,
+  :root[data-theme='dark'] .note-content pre .token.atrule,
+  :root[data-theme='dark'] .note-content pre .token.module {
+    color: #c678dd;
+  }
+  :root[data-theme='dark'] .note-content pre .token.string,
+  :root[data-theme='dark'] .note-content pre .token.char,
+  :root[data-theme='dark'] .note-content pre .token.attr-value,
+  :root[data-theme='dark'] .note-content pre .token.template-string,
+  :root[data-theme='dark'] .note-content pre .token.inserted {
+    color: #98c379;
+  }
+  :root[data-theme='dark'] .note-content pre .token.number,
+  :root[data-theme='dark'] .note-content pre .token.boolean,
+  :root[data-theme='dark'] .note-content pre .token.constant,
+  :root[data-theme='dark'] .note-content pre .token.symbol {
+    color: #d19a66;
+  }
+  :root[data-theme='dark'] .note-content pre .token.function,
+  :root[data-theme='dark'] .note-content pre .token.method {
+    color: #61afef;
+  }
+  :root[data-theme='dark'] .note-content pre .token.class-name,
+  :root[data-theme='dark'] .note-content pre .token.maybe-class-name,
+  :root[data-theme='dark'] .note-content pre .token.regex,
+  :root[data-theme='dark'] .note-content pre .token.important {
+    color: #e3b341;
+  }
+  :root[data-theme='dark'] .note-content pre .token.parameter {
+    color: #e5c07b;
+  }
+  :root[data-theme='dark'] .note-content pre .token.property,
+  :root[data-theme='dark'] .note-content pre .token.literal-property,
+  :root[data-theme='dark'] .note-content pre .token.attr-name,
+  :root[data-theme='dark'] .note-content pre .token.selector,
+  :root[data-theme='dark'] .note-content pre .token.tag,
+  :root[data-theme='dark'] .note-content pre .token.builtin {
+    color: #7ee787;
+  }
+  :root[data-theme='dark'] .note-content pre .token.operator,
+  :root[data-theme='dark'] .note-content pre .token.entity,
+  :root[data-theme='dark'] .note-content pre .token.url,
+  :root[data-theme='dark'] .note-content pre .token.interpolation {
+    color: #56b6c2;
+  }
+  :root[data-theme='dark'] .note-content pre .token.punctuation,
+  :root[data-theme='dark'] .note-content pre .token.interpolation-punctuation {
+    color: #c9d1d9;
+  }
+  :root[data-theme='dark'] .note-content pre .token.variable {
+    color: #a9bcd8;
+  }
+  :root[data-theme='dark'] .note-content pre .token.deleted {
+    color: #ff7b72;
+  }
+
+  /* ---------- 通用控件高光：深底上把「叠白」压到极弱 ---------- */
+  :root[data-theme='dark'] .icon-btn:hover:not(:active):not(:disabled),
+  :root[data-theme='dark'] .mini-btn:hover:not(:active):not(:disabled) {
+    background: var(--surface-hl);
+  }
+  :root[data-theme='dark'] .btn-primary:hover:not(:active):not(:disabled) {
+    background: var(--surface-hl-strong);
+  }
+  :root[data-theme='dark'] .btn-ghost:hover:not(:active):not(:disabled) {
+    background: var(--surface-hl-soft);
+  }
+}
+
+/* ============================================================
+   黑夜模式（续）：组件内直接写着绝对色的少量的位置
+   —— 组件的 scoped 样式里这些颜色是 rgba(255,255,255,…) 叠白、浅色
+      轨道或纯白底，深色下会过亮 / 突兀，这里统一覆盖。
+      `:root[data-theme='dark']` 前缀的特异性高于组件的单属性选择器，
+      所以无需改组件文件。同样只在屏幕上生效。
+   ============================================================ */
+@media screen {
+  /* 顶栏下拉 / 字体面板 / 目录 / 工具栏 / 表格菜单 / 样式弹窗的 hover 高光 */
+  :root[data-theme='dark'] .fs__btn:hover:not(:active):not(.open),
+  :root[data-theme='dark'] .fs__opt:hover:not(.is-active),
+  :root[data-theme='dark'] .outline__item:hover:not(.is-active),
+  :root[data-theme='dark'] .btn:hover:not(:active):not(.active),
+  :root[data-theme='dark'] .tb .btn:hover:not(:active):not(.open),
+  :root[data-theme='dark'] .tb__opt:hover:not(:active),
+  :root[data-theme='dark'] .tb__align-btn:hover:not(:active):not(.active),
+  :root[data-theme='dark'] .tb__step:hover:not(:active),
+  :root[data-theme='dark'] .ss__btn:hover:not(:active):not(.active),
+  :root[data-theme='dark'] .ss__close:hover:not(:active),
+  :root[data-theme='dark'] .ss__tab:hover:not(:active):not(.active),
+  :root[data-theme='dark'] .seg__btn:hover:not(:active):not(.active),
+  :root[data-theme='dark'] .ss__snap-input:focus,
+  :root[data-theme='dark'] .ss__go--ghost:hover:not(:active),
+  :root[data-theme='dark'] .ss__trigger:hover:not(:active):not(.open),
+  :root[data-theme='dark'] .ss__mini:hover:not(:active),
+  :root[data-theme='dark'] .ss__reset:hover:not(:active),
+  :root[data-theme='dark'] .ss__save:hover:not(:active):not(:disabled),
+  :root[data-theme='dark'] .cb-opt:hover:not(:disabled):not(.active) {
+    background: var(--surface-hl);
+  }
+
+  /* 表格菜单：主操作亮一层 / 危险操作换亮红 / 分隔线换浅色 */
+  :root[data-theme='dark'] .tb__opt--primary {
+    background: var(--surface-hl-strong);
+  }
+  :root[data-theme='dark'] .tb__opt--danger {
+    color: var(--danger);
+  }
+  :root[data-theme='dark'] .tb__sep {
+    background: var(--sep-line);
+  }
+
+  /* 样式弹窗：滑块轨道 / 取色色块 / 蓝底主按钮 */
+  :root[data-theme='dark'] .range::-webkit-slider-runnable-track {
+    background: var(--track-bg);
+    box-shadow: var(--track-inset);
+  }
+  :root[data-theme='dark'] .range::-moz-range-track {
+    background: var(--track-bg);
+  }
+  :root[data-theme='dark'] .c-swatch {
+    background: var(--bg-soft);
+  }
+  :root[data-theme='dark'] .ss__go {
+    background: linear-gradient(180deg, #5c86ef, var(--accent));
+    color: var(--on-accent);
+  }
+}

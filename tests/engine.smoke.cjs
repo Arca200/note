@@ -1,0 +1,863 @@
+/* eslint-disable */
+// 自研块编辑器 DOM 引擎冒烟测试（node + jsdom，非浏览器内完整验证）
+// 运行：node tests/engine.smoke.cjs
+const { JSDOM } = require('jsdom')
+const assert = require('assert')
+
+const dom = new JSDOM('<!doctype html><html><body></body></html>', {
+  url: 'http://localhost/',
+})
+global.window = dom.window
+global.document = dom.window.document
+global.Node = dom.window.Node
+global.NodeFilter = dom.window.NodeFilter
+global.DOMException = dom.window.DOMException
+
+const blocks = require(require('path').join(
+  __dirname,
+  '..',
+  'node_modules',
+  '.cache',
+  'blocks-test.cjs',
+))
+
+let passed = 0
+let failed = 0
+function check(name, fn) {
+  try {
+    fn()
+    passed++
+    console.log(`  ✔ ${name}`)
+  } catch (err) {
+    failed++
+    console.log(`  ✘ ${name}\n    ${err.message}`)
+  }
+}
+function reset() {
+  document.body.innerHTML = ''
+}
+function editorWith(html) {
+  const el = document.createElement('div')
+  el.contentEditable = 'true'
+  el.innerHTML = html
+  document.body.appendChild(el)
+  return el
+}
+{
+  // 回归：已渲染的代码块（换行是 <br>）不能被 codeTextToBrDom 压成一行。
+  // 旧实现按 textContent 重建，看不到 <br> 换行，会把整块挤成一行，
+  // 之后高亮就把这一行从行首 // 起全当成注释。
+  const editor = editorWith(
+    '<p>x</p><pre><code>a\nb\nc</code></pre>' +
+      '<pre><code>l1<br>l2<br>l3<br>\u200b</code></pre>',
+  )
+  blocks.codeTextToBrDom(editor)
+  const pres = editor.querySelectorAll('pre')
+  assert.strictEqual(
+    pres[0].querySelectorAll('br').length,
+    2,
+    '存储形态的块应转成 <br> 行',
+  )
+  assert.strictEqual(
+    pres[1].querySelectorAll('br').length,
+    3,
+    '已渲染的块必须原样保留（含末尾光标锚点）',
+  )
+  reset()
+  check('P1 codeTextToBrDom 不破坏已渲染的代码块（含光标锚点）', () => {})
+}
+function firstText(el) {
+  return el.querySelector('*')?.firstChild ?? el.firstChild
+}
+/** 让选区覆盖从首个块 textIndex 开始的 len 个字符 */
+function selectText(el, start, len) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let acc = 0
+  let n = walker.nextNode()
+  let startNode = null
+  let startOff = 0
+  while (n) {
+    const L = (n.textContent || '').length
+    if (!startNode && acc + L > start) {
+      startNode = n
+      startOff = start - acc
+      break
+    }
+    acc += L
+    n = walker.nextNode()
+  }
+  if (!startNode) throw new Error('selectText: start out of range')
+  // 重新走一遍找终点
+  const walker2 = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  let acc2 = 0
+  let n2 = walker2.nextNode()
+  let endNode = null
+  let endOff = 0
+  while (n2) {
+    const L = (n2.textContent || '').length
+    if (acc2 + L >= start + len) {
+      endNode = n2
+      endOff = start + len - acc2
+      break
+    }
+    acc2 += L
+    n2 = walker2.nextNode()
+  }
+  const range = document.createRange()
+  range.setStart(startNode, startOff)
+  range.setEnd(endNode ?? startNode, endOff ?? startOff)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+reset()
+console.log('A. 段落 ↔ 标题切换')
+{
+  const el = editorWith('<p>你好世界</p>')
+  blocks.placeCaretAtEndOf(el.querySelector('p'))
+  blocks.setBlockType(el, 'h1')
+  assert.strictEqual(el.firstElementChild.tagName, 'H1')
+  // jsdom 在 DOM 替换后会丢 selection，因此手动重设光标再 toggle
+  blocks.placeCaretAtEndOf(el.querySelector('h1'))
+  blocks.setBlockType(el, 'h1') // toggle → 段落
+  assert.strictEqual(el.firstElementChild.tagName, 'P')
+  assert.strictEqual(el.textContent, '你好世界')
+  check('A1 段落转 h1 再切回正文，文本保留', () => {})
+}
+
+reset()
+console.log('B. 中文字距 / 英文间隔包裹')
+{
+  // 夹在中文中的英文：两侧都留间隔
+  const el = editorWith('<p>中文abc中文</p>')
+  blocks.wrapTypographySpans(el)
+  const p = el.querySelector('p')
+  const abc = p.querySelector('span.latin')
+  assert.ok(abc.classList.contains('latin--gap-l'))
+  assert.ok(abc.classList.contains('latin--gap-r'))
+  assert.strictEqual(p.textContent, '中文abc中文') // 包裹不改变文本
+
+  // 纯英文 / 与 ASCII 标点相邻：视为一体，不留间隔
+  const el2 = editorWith('<p>abc(def)ghi</p>')
+  blocks.wrapTypographySpans(el2)
+  const latin2 = Array.from(el2.querySelectorAll('span.latin'))
+  assert.deepStrictEqual(
+    latin2.map((s) => s.textContent),
+    ['abc', '(', 'def', ')', 'ghi'],
+  )
+  for (const s of latin2) {
+    assert.strictEqual(s.className.trim(), 'latin') // 两侧都是西文 → 无间隔
+  }
+
+  // add_child(主场景实例)：开括号右侧、闭括号左侧都要留间隔
+  const el3 = editorWith('<p>执行 add_child(主场景实例)。</p>')
+  blocks.wrapTypographySpans(el3)
+  const open = Array.from(el3.querySelectorAll('span.latin')).find((s) => s.textContent === '(')
+  const close = Array.from(el3.querySelectorAll('span.latin')).find((s) => s.textContent === ')')
+  assert.ok(open && open.classList.contains('latin--gap-r')) // （ 右边有空隙
+  assert.ok(close && close.classList.contains('latin--gap-l')) // ）左边有空隙
+  assert.ok(close.classList.contains('latin--gap-r')) // ）右边（挨着中文标点）也有空隙
+  check('B1 英文/标点与中文交界的两侧留间隔，与西文相邻视为一体', () => {})
+}
+{
+  // 段首不继承上一块的末尾字符：前一块以中文结尾、后一段以西文开头时，
+  // 段首的西文词不应被加上左间隔（否则整段相对上一段“缩进”一点）。
+  const el = editorWith(
+    '<h1>运行时主循环</h1><p>physics_step是倒数</p><p>physics_step是倒数</p>',
+  )
+  blocks.wrapTypographySpans(el)
+  const ps = Array.from(el.querySelectorAll('p'))
+  const first = ps[0].querySelector('span.latin')
+  const second = ps[1].querySelector('span.latin')
+  assert.ok(!first.classList.contains('latin--gap-l'), '段首不应加左间隔')
+  assert.ok(!second.classList.contains('latin--gap-l'), '段首不应加左间隔')
+  assert.ok(first.classList.contains('latin--gap-r'))
+  assert.ok(second.classList.contains('latin--gap-r'))
+  check('B2 段首不继承上一块末尾字符（两段西文段首对齐）', () => {})
+}
+
+reset()
+console.log('C. 代码块往返')
+{
+  const el = editorWith('<p>第一行<br>第二行</p>')
+  blocks.placeCaretAtEndOf(el.querySelector('p'))
+  blocks.setBlockType(el, 'codeblock')
+  const pre = el.firstElementChild
+  assert.strictEqual(pre.tagName, 'PRE')
+  // 代码块内的换行：编辑期 DOM 用 <br> 表示（存储时再转回换行符）
+  assert.strictEqual(pre.textContent, '第一行第二行')
+  assert.strictEqual(pre.querySelectorAll('br').length, 1)
+  blocks.placeCaretAtEndOf(pre)
+  blocks.setBlockType(el, 'paragraph')
+  assert.strictEqual(el.firstElementChild.tagName, 'P')
+  assert.ok(el.textContent.includes('第一行'))
+  check('C1 段落→代码块→段落（内容保留）', () => {})
+}
+
+reset()
+console.log('D. 段落→无序列表，回车续项')
+{
+  const el = editorWith('<p>第一项</p>')
+  blocks.placeCaretAtEndOf(el.querySelector('p'))
+  blocks.setBlockType(el, 'bulletList')
+  const ul = el.firstElementChild
+  assert.strictEqual(ul.tagName, 'UL')
+  blocks.placeCaretAtEndOf(ul.querySelector('li'))
+  blocks.handleEnterKey(el) // li 末尾回车 → 新 li
+  const lis = ul.querySelectorAll('li')
+  assert.strictEqual(lis.length, 2)
+  check('D1 段落转无序列表', () => {})
+  blocks.handleEnterKey(el) // 空 li 回车 → 退出列表
+  assert.ok(el.firstElementChild.tagName === 'UL')
+  assert.ok(el.textContent.includes('第一项'))
+  check('D2 空列表项回车可退出列表', () => {})
+}
+
+reset()
+console.log('E. 行内粗体 toggle')
+{
+  const el = editorWith('<p>你好世界</p>')
+  selectText(el, 0, 2)
+  blocks.toggleInlineMark(el, 'bold')
+  assert.ok(el.querySelector('p b') || el.querySelector('p strong'))
+  assert.strictEqual(el.textContent, '你好世界')
+  selectText(el, 0, 2)
+  blocks.toggleInlineMark(el, 'bold') // 取消
+  assert.ok(!el.querySelector('p b') && !el.querySelector('p strong'))
+  check('E1 粗体加/取消不丢字', () => {})
+}
+
+reset()
+console.log('F. 标题内回车 → 后续为正文段落')
+{
+  const el = editorWith('<h1>标题内容</h1>')
+  const h = el.querySelector('h1')
+  const textNode = h.firstChild
+  const range = document.createRange()
+  range.setStart(textNode, 2)
+  range.collapse(true)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+  const handled = blocks.handleEnterKey(el)
+  assert.strictEqual(handled, true)
+  assert.strictEqual(el.firstElementChild.tagName, 'H1')
+  const second = el.children[1]
+  assert.strictEqual(second.tagName, 'P')
+  assert.strictEqual(el.textContent, '标题内容')
+  check('F1 标题中回车拆出正文段', () => {})
+}
+
+reset()
+console.log('H. 行首 / 行尾回车语义')
+{
+  // 行尾回车：应在段落之后追加一个可输入的空行
+  const el = editorWith('<p>hello</p>')
+  const tn = el.querySelector('p').firstChild
+  const r1 = document.createRange()
+  r1.setStart(tn, 5)
+  r1.collapse(true)
+  const s1 = window.getSelection()
+  s1.removeAllRanges()
+  s1.addRange(r1)
+  blocks.handleEnterKey(el)
+  assert.strictEqual(el.children.length, 2)
+  assert.strictEqual(el.children[0].textContent, 'hello')
+  assert.strictEqual(el.children[1].tagName, 'P')
+  assert.ok(!el.children[1].textContent.trim())
+  check('H1 行尾回车在下方追加空行', () => {})
+
+  // 行首回车：在段落上方让出空行，光标跟随原文字一起下移（仍在该行文字开头）
+  const el2 = editorWith('<p>hello</p>')
+  const tn2 = el2.querySelector('p').firstChild
+  const r2 = document.createRange()
+  r2.setStart(tn2, 0)
+  r2.collapse(true)
+  const s2 = window.getSelection()
+  s2.removeAllRanges()
+  s2.addRange(r2)
+  blocks.handleEnterKey(el2)
+  assert.strictEqual(el2.children.length, 2)
+  assert.ok(!el2.children[0].textContent.trim())
+  assert.strictEqual(el2.children[1].textContent, 'hello')
+  const caretBlock = blocks.resolveBlock(el2)
+  assert.strictEqual(caretBlock.tagName, 'P')
+  assert.strictEqual(caretBlock.textContent, 'hello') // 光标跟着原文字下移
+  check('H2 行首回车让出空行、光标跟随原行', () => {})
+}
+
+reset()
+console.log('G. 选中多段合并为代码块')
+{
+  const el = editorWith('<p>甲</p><p>乙</p>')
+  const t1 = el.children[0].firstChild
+  const t2 = el.children[1].firstChild
+  const range = document.createRange()
+  range.setStart(t1, 0)
+  range.setEnd(t2, (t2.textContent ?? '').length)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+  blocks.setBlockType(el, 'codeblock')
+  assert.strictEqual(el.querySelectorAll('pre').length, 1)
+  const flat = (el.querySelector('pre').textContent ?? '')
+    .replace(/\u200b/g, '')
+    .replace(/\n/g, '')
+  assert.strictEqual(flat, '甲乙')
+  check('G1 选中多个段落合并为一个代码块', () => {})
+}
+
+reset()
+console.log('I. 代码块行注释切换（⌘/）')
+{
+  // 单行：光标所在行加/去注释
+  const el = editorWith('<pre><code>const a = 1<br>const b = 2</code></pre>')
+  const code = el.querySelector('code')
+  const line2 = code.childNodes[2] // 第二行文本节点
+  const r = document.createRange()
+  r.setStart(line2, 3)
+  r.collapse(true)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(r)
+
+  assert.strictEqual(blocks.toggleCodeComment(el), true)
+  // 用 DOM 逐行读：<br> 分行
+  const readLines = (pre) => {
+    const out = ['']
+    for (const n of Array.from(pre.querySelector('code').childNodes)) {
+      if (n.tagName === 'BR') out.push('')
+      else out[out.length - 1] += (n.textContent ?? '').replace(/\u200b/g, '')
+    }
+    return out
+  }
+  const after = readLines(el.querySelector('pre'))
+  assert.deepStrictEqual(after, ['const a = 1', '// const b = 2'])
+  // 再切一次 → 还原
+  assert.strictEqual(blocks.toggleCodeComment(el), true)
+  assert.deepStrictEqual(readLines(el.querySelector('pre')), ['const a = 1', 'const b = 2'])
+  check('I1 单行注释可加可去', () => {})
+}
+{
+  // 多行 + 缩进保留
+  const el = editorWith('<pre><code>function f() {<br>  return 1<br>}</code></pre>')
+  const code = el.querySelector('code')
+  const r = document.createRange()
+  r.setStart(code.firstChild, 0)
+  r.setEnd(code.lastChild, 1)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const readLines = (pre) => {
+    const out = ['']
+    for (const n of Array.from(pre.querySelector('code').childNodes)) {
+      if (n.tagName === 'BR') out.push('')
+      else out[out.length - 1] += (n.textContent ?? '').replace(/\u200b/g, '')
+    }
+    return out
+  }
+  blocks.toggleCodeComment(el)
+  assert.deepStrictEqual(readLines(el.querySelector('pre')), [
+    '// function f() {',
+    '  // return 1',
+    '// }',
+  ])
+  // 重新选中三行再切换 → 全部取消
+  const code2 = el.querySelector('code')
+  const texts = Array.from(code2.childNodes).filter((n) => n.nodeType === 3)
+  const r2 = document.createRange()
+  r2.setStart(texts[0], 0)
+  r2.setEnd(texts[texts.length - 1], (texts[texts.length - 1].textContent ?? '').length)
+  sel.removeAllRanges()
+  sel.addRange(r2)
+  blocks.toggleCodeComment(el)
+  assert.deepStrictEqual(readLines(el.querySelector('pre')), [
+    'function f() {',
+    '  return 1',
+    '}',
+  ])
+  check('I2 多行注释、缩进保留、可整体取消', () => {})
+}
+{
+  // 正文里不应生效
+  const el = editorWith('<p>正文</p>')
+  const tn = el.querySelector('p').firstChild
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(r)
+  assert.strictEqual(blocks.toggleCodeComment(el), false)
+  assert.strictEqual(el.querySelector('p').textContent, '正文')
+  check('I3 正文中按 ⌘/ 不生效', () => {})
+}
+
+reset()
+console.log('J. 光标锚点区分“行首”与“上一行末尾”')
+{
+  const el = editorWith('<pre><code>a<br>b</code></pre>')
+  const code = el.querySelector('code')
+  const br = code.childNodes[1]
+  const sel = window.getSelection()
+  // 第 1 行末尾（换行之前）
+  let r = document.createRange()
+  r.setStart(code.firstChild, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const atLine1End = blocks.caretAnchor(el)
+  // 第 2 行行首（换行之后）
+  r = document.createRange()
+  r.setStartAfter(br)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const atLine2Start = blocks.caretAnchor(el)
+
+  assert.strictEqual(atLine1End.offset, 1)
+  assert.strictEqual(atLine2Start.offset, 2) // <br> 计 1
+  assert.notStrictEqual(atLine1End.offset, atLine2Start.offset)
+  // 往返恢复后仍在第 2 行行首
+  blocks.restoreCaretAnchor(el, atLine2Start)
+  assert.strictEqual(blocks.caretAnchor(el).offset, 2)
+  check('J1 代码块内行首与上一行末尾锚点不同、可精确恢复', () => {})
+}
+{
+  // 空行（第 2 行）行首也要能精确往返
+  const el = editorWith('<pre><code>a<br><br>b</code></pre>')
+  const code = el.querySelector('code')
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStartAfter(code.childNodes[1])
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const anchor = blocks.caretAnchor(el)
+  assert.strictEqual(anchor.offset, 2)
+  blocks.restoreCaretAnchor(el, anchor)
+  assert.strictEqual(blocks.caretAnchor(el).offset, 2)
+  check('J2 空行行首的光标可精确往返', () => {})
+}
+
+reset()
+console.log('K. 表格')
+{
+  const el = editorWith('<p>前</p>')
+  const tn = el.querySelector('p').firstChild
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(r)
+  assert.strictEqual(blocks.insertTable(el, 3, 2), true)
+  const table = el.querySelector('table')
+  assert.ok(table, '应插入表格')
+  const rows = table.querySelectorAll('tr')
+  assert.strictEqual(rows.length, 3)
+  assert.strictEqual(rows[0].querySelectorAll('th').length, 2, '首行应为表头 th')
+  assert.strictEqual(rows[1].querySelectorAll('td').length, 2)
+  assert.strictEqual(rows[1].querySelectorAll('td')[0].querySelector('br') !== null, true, '空单元格要有落脚点')
+  // 表格后应留一个空段落
+  assert.strictEqual(el.lastElementChild.tagName, 'P')
+  // 光标进入第一个单元格
+  const ctx = blocks.tableContext(el)
+  assert.strictEqual(ctx.rowIndex, 0)
+  assert.strictEqual(ctx.colIndex, 0)
+  check('K1 插入 3×2 表格：结构、落脚点、光标到位', () => {})
+}
+{
+  const el = editorWith('<p>x</p>')
+  const tn = el.querySelector('p').firstChild
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  blocks.insertTable(el, 3, 2)
+  // Enter：到下一行同列
+  blocks.tableEnterNext(el)
+  let ctx = blocks.tableContext(el)
+  assert.strictEqual(ctx.rowIndex, 1)
+  assert.strictEqual(ctx.colIndex, 0)
+  blocks.tableEnterNext(el)
+  ctx = blocks.tableContext(el)
+  assert.strictEqual(ctx.rowIndex, 2)
+  // 末行再 Enter → 新建一行
+  blocks.tableEnterNext(el)
+  ctx = blocks.tableContext(el)
+  assert.strictEqual(el.querySelectorAll('tr').length, 4)
+  assert.strictEqual(ctx.rowIndex, 3)
+  assert.strictEqual(ctx.colIndex, 0)
+  // 新行的单元格应是 td
+  assert.strictEqual(el.querySelectorAll('tr')[3].querySelectorAll('td').length, 2)
+  check('K2 Enter 下一行同列，末行新增一行', () => {})
+}
+{
+  const el = editorWith('<p>x</p>')
+  const tn = el.querySelector('p').firstChild
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  blocks.insertTable(el, 2, 2)
+  // Tab → 右移一格
+  blocks.tableMoveCell(el)
+  let ctx = blocks.tableContext(el)
+  assert.strictEqual(ctx.rowIndex, 0)
+  assert.strictEqual(ctx.colIndex, 1)
+  // Shift+Tab → 回退
+  blocks.tableMoveCell(el, true)
+  ctx = blocks.tableContext(el)
+  assert.strictEqual(ctx.colIndex, 0)
+  // 走到最后一个单元格再 Tab → 新建一行
+  blocks.tableMoveCell(el) // (0,1)
+  blocks.tableMoveCell(el) // (1,0)
+  blocks.tableMoveCell(el) // (1,1) 最后一个
+  blocks.tableMoveCell(el) // 新建行
+  ctx = blocks.tableContext(el)
+  assert.strictEqual(el.querySelectorAll('tr').length, 3)
+  assert.strictEqual(ctx.rowIndex, 2)
+  assert.strictEqual(ctx.colIndex, 0)
+  check('K3 Tab 移动单元格，末格新建一行', () => {})
+}
+{
+  const el = editorWith('<p>x</p>')
+  const tn = el.querySelector('p').firstChild
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  blocks.insertTable(el, 3, 2)
+  const table = el.querySelector('table')
+  // 在当前行（第 1 行）下方插行
+  assert.strictEqual(blocks.insertTableRow(el, 'below'), true)
+  assert.strictEqual(table.querySelectorAll('tr').length, 4)
+  // 上方插行（光标已在新行第 1 行下方 → 也就是第 2 行）
+  blocks.insertTableRow(el, 'above')
+  assert.strictEqual(table.querySelectorAll('tr').length, 5)
+  // 删除当前行
+  assert.strictEqual(blocks.deleteTableRow(el), true)
+  assert.strictEqual(table.querySelectorAll('tr').length, 4)
+  // 列：插入 / 删除
+  assert.strictEqual(blocks.insertTableColumn(el, 'right'), true)
+  assert.strictEqual(table.querySelectorAll('tr')[0].querySelectorAll('th, td').length, 3)
+  assert.strictEqual(blocks.deleteTableColumn(el), true)
+  assert.strictEqual(table.querySelectorAll('tr')[0].querySelectorAll('th, td').length, 2)
+  check('K4 增删行列', () => {})
+}
+{
+  const el = editorWith('<p>x</p>')
+  const tn = el.querySelector('p').firstChild
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tn, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  blocks.insertTable(el, 2, 2)
+  assert.strictEqual(blocks.deleteTable(el), true)
+  assert.strictEqual(el.querySelector('table'), null)
+  // 删表后光标应落在段落里
+  const block = blocks.resolveBlock(el)
+  assert.strictEqual(block.tagName, 'P')
+  // 只剩一行时删行 = 删整表
+  const el2 = editorWith('<table><tbody><tr><td><br></td></tr></tbody></table><p>尾</p>')
+  const cell = el2.querySelector('td')
+  const r2 = document.createRange()
+  r2.setStart(cell, 0)
+  r2.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r2)
+  blocks.deleteTableRow(el2)
+  assert.strictEqual(el2.querySelector('table'), null)
+  check('K5 删除整表（含仅一行时删行等价删表）', () => {})
+}
+{
+  // 单元格边界与换行一样占偏移：td1 末尾 ≠ td2 开头
+  const el = editorWith('<table><tbody><tr><td>甲</td><td>乙</td></tr></tbody></table>')
+  const tds = el.querySelectorAll('td')
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tds[0].firstChild, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const atEndOfCell1 = blocks.caretAnchor(el)
+  const r2 = document.createRange()
+  r2.setStart(tds[1], 0)
+  r2.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r2)
+  const atStartOfCell2 = blocks.caretAnchor(el)
+  assert.notStrictEqual(atEndOfCell1.offset, atStartOfCell2.offset)
+  // 往返恢复后仍在第 2 格
+  blocks.restoreCaretAnchor(el, atStartOfCell2)
+  assert.strictEqual(blocks.caretAnchor(el).offset, atStartOfCell2.offset)
+  check('K6 表格内光标锚点区分格首与上一格末尾', () => {})
+}
+{
+  // 表格是独立块类型：块切换与清理都不该动它
+  const el = editorWith('<table><tbody><tr><td><br></td></tr></tbody></table>')
+  const cell = el.querySelector('td')
+  const r = document.createRange()
+  r.setStart(cell, 0)
+  r.collapse(true)
+  const sel = window.getSelection()
+  sel.removeAllRanges()
+  sel.addRange(r)
+  assert.strictEqual(blocks.resolveBlock(el).tagName, 'TABLE')
+  blocks.setBlockType(el, 'h1')
+  assert.ok(el.querySelector('table'), '块切换不应把表格改成标题')
+  assert.strictEqual(el.querySelector('h1'), null)
+  blocks.tidyBlock(el.querySelector('table'))
+  assert.ok(el.querySelector('td br'), '清理不应删掉单元格里的 <br>')
+  check('K7 表格不受块切换与 tidyBlock 影响', () => {})
+}
+
+reset()
+console.log('L. 表格单元格对齐')
+{
+  const el = editorWith('<table><tbody><tr><td>甲</td><td>乙</td></tr></tbody></table>')
+  const tds = el.querySelectorAll('td')
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(tds[0].firstChild, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+
+  assert.strictEqual(blocks.tableContext(el).align, 'left') // 默认左对齐
+  assert.strictEqual(blocks.setTableCellAlign(el, 'center'), true)
+  assert.strictEqual(tds[0].style.textAlign, 'center')
+  assert.strictEqual(blocks.tableContext(el).align, 'center')
+  assert.strictEqual(tds[1].style.textAlign, '', '只影响光标所在单元格')
+
+  blocks.setTableCellAlign(el, 'right')
+  assert.strictEqual(tds[0].style.textAlign, 'right')
+
+  // 回到左对齐 = 清除字面样式，存储保持干净
+  blocks.setTableCellAlign(el, 'left')
+  assert.strictEqual(tds[0].getAttribute('style'), null)
+  assert.strictEqual(blocks.tableContext(el).align, 'left')
+  check('L1 单元格对齐可设置 / 切换 / 清除', () => {})
+}
+{
+  // 跨格选区批量设置
+  const el = editorWith('<table><tbody><tr><td>甲</td><td>乙</td><td>丙</td></tr></tbody></table>')
+  const tds = el.querySelectorAll('td')
+  const sel = window.getSelection()
+  const range = document.createRange()
+  range.setStart(tds[0].firstChild, 0)
+  range.setEnd(tds[1].firstChild, 1)
+  sel.removeAllRanges()
+  sel.addRange(range)
+  assert.strictEqual(blocks.setTableCellAlign(el, 'center'), true)
+  assert.strictEqual(tds[0].style.textAlign, 'center')
+  assert.strictEqual(tds[1].style.textAlign, 'center')
+  assert.strictEqual(tds[2].style.textAlign, '', '选区外的单元格不受影响')
+  check('L2 选中多个单元格可批量设置对齐', () => {})
+}
+
+reset()
+console.log('M. 代码块末尾的光标锚点')
+{
+  // 末尾是“空行”（<br> + 零宽锚点）：光标停在锚点里，偏移必须算对且往返不变
+  const el = editorWith('<pre><code>const a = 1<br>\u200b</code></pre>')
+  const code = el.querySelector('code')
+  const anchorText = code.lastChild // 零宽锚点文本节点
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(anchorText, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const a = blocks.caretAnchor(el)
+  assert.ok(a, '应能取到锚点')
+  assert.strictEqual(a.offset, 12, '11 个字符 + 1 个换行 = 12（零宽锚点不占偏移）')
+  blocks.restoreCaretAnchor(el, a)
+  const back = blocks.caretAnchor(el)
+  assert.strictEqual(back.offset, a.offset, '往返后偏移不变')
+  check('M1 代码块末尾空行的光标锚点正确（含零宽锚点换算）', () => {})
+}
+{
+  // 光标容器是块元素自身（Chrome 在末尾常这样表达）：不能退化成偏移 0
+  const el = editorWith('<pre><code>const a = 1</code></pre>')
+  const pre = el.querySelector('pre')
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(pre, pre.childNodes.length)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  const a = blocks.caretAnchor(el)
+  assert.ok(a, '应能取到锚点')
+  assert.notStrictEqual(a.offset, 0, '不能退化成块首')
+  assert.strictEqual(a.offset, 11, '应等于块内全部内容长度')
+  check('M2 容器为块元素自身时锚点不退化为 0', () => {})
+}
+
+reset()
+console.log('P. 代码块末尾按 ↓ 新建空行')
+{
+  // 末尾空行（<br> + 零宽锚点）+ 后面已有内容：应插入空段落，原内容下移
+  const el = editorWith('<pre><code>const a = 1<br>\u200b</code></pre><p>后面</p>')
+  const anchorText = el.querySelector('code').lastChild
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(anchorText, 1)
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  assert.strictEqual(blocks.codeExitOnArrowDown(el), true, '末尾按 ↓ 应处理')
+  const tags = Array.from(el.children).map((n) => n.tagName)
+  assert.deepStrictEqual(tags, ['PRE', 'P', 'P'], '代码块下方插入空段落，原内容下移')
+  assert.strictEqual((el.children[1].textContent || '').trim(), '', '新空行无文本')
+  assert.strictEqual(el.children[2].textContent, '后面', '原有内容保持在下')
+  check('P1 末尾按 ↓ 总在代码块下方新建空行，原内容下移', () => {})
+}
+{
+  // 非最后一行不处理；最后一行任意列都触发
+  const el = editorWith('<pre><code>a<br>b<br>c</code></pre>')
+  const code = el.querySelector('code')
+  const sel = window.getSelection()
+  const r = document.createRange()
+  r.setStart(code.firstChild, 1) // 第 0 行
+  r.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r)
+  assert.strictEqual(blocks.codeExitOnArrowDown(el), false, '非最后一行交给浏览器')
+  const r2 = document.createRange()
+  r2.setStart(code.lastChild, 0) // 最后一行行首（任意位置）
+  r2.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(r2)
+  assert.strictEqual(blocks.codeExitOnArrowDown(el), true, '最后一行任意位置可触发')
+  check('P2 仅最后一行触发（任意列）', () => {})
+}
+
+reset()
+console.log('N. 保存时的代码块格式化')
+{
+  const src = 'if (x) {\n\t\treturn x;\n\t}'
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(out, 'if (x) {\n        return x\n    }')
+  check('N1 行首 Tab → 4 空格，且去掉行尾分号', () => {})
+}
+{
+  // 行内的 Tab 与分号不动
+  const src = 'const s = "a\tb";\nfoo(); bar();'
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(out, 'const s = "a\tb"\nfoo(); bar()')
+  check('N2 行内 Tab / 行内分号保持不动', () => {})
+}
+{
+  // 连续空行：≥3 折成 1，1~2 行保留
+  const src = ['a', '', '', '', 'b', '', '', '', 'c', '', '', 'd'].join('\n')
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(out, ['a', '', 'b', '', 'c', '', '', 'd'].join('\n'))
+  check('N3 连续 3 行以上空行折成 1 行', () => {})
+}
+{
+  // 幂等 + 组合
+  const src = '\tfoo();\n\n\n\n\tbar();'
+  const once = blocks.formatCodeText(src)
+  assert.strictEqual(once, '    foo()\n\n    bar()')
+  assert.strictEqual(blocks.formatCodeText(once), once)
+  check('N4 格式化幂等', () => {})
+}
+{
+  // 行尾注释 → 注释提为独立一行、其上方空一行；单行 if + return 一并拆行
+  const src = ['const a = 1', 'if (nodes.size() == 0) return null // 空场景', 'const b = 2'].join('\n')
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(
+    out,
+    ['const a = 1', '', '// 空场景', 'if (nodes.size() == 0)', '    return null', 'const b = 2'].join('\n'),
+  )
+  check('N5 行尾注释上移 + if + return 拆行', () => {})
+}
+{
+  // 普通行尾注释：注释上移、上方空一行；剥离后落在行尾的分号去掉
+  const src = ['a = 1', 'names = []; // 字符串池', 'b = 2'].join('\n')
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(
+    out,
+    ['a = 1', '', '// 字符串池', 'names = []', 'b = 2'].join('\n'),
+  )
+  check('N6 普通行尾注释上移 + 空行 + 去分号', () => {})
+}
+{
+  // 独占一行的注释不动；`else if` 与块级 if 不动；结果幂等
+  const alone = ['a = 1', '// 独立注释', 'b = 2'].join('\n')
+  assert.strictEqual(blocks.formatCodeText(alone), alone)
+  assert.strictEqual(blocks.formatCodeText('else if (a) return b'), 'else if (a) return b')
+  const block = ['if (a) {', '    return b', '}'].join('\n')
+  assert.strictEqual(blocks.formatCodeText(block), block)
+  const indented = blocks.formatCodeText('    if (a) return b')
+  assert.strictEqual(indented, '    if (a)\n        return b')
+  assert.strictEqual(blocks.formatCodeText(indented), indented)
+  const hoisted = blocks.formatCodeText(['x = 1', 'y = 2 // Y'].join('\n'))
+  assert.strictEqual(blocks.formatCodeText(hoisted), hoisted)
+  check('N7 独立注释 / else if / 块级 if 不动，幂等', () => {})
+}
+{
+  // 单行控制结构（if / for / while）都拆；条件/体含括号、块级、空体正确处理
+  assert.strictEqual(
+    blocks.formatCodeText('if (data.tree) child._set_tree(data.tree)'),
+    'if (data.tree)\n    child._set_tree(data.tree)',
+  )
+  assert.strictEqual(
+    blocks.formatCodeText('for (const child of data.children.reverse()) child._propagate_exit_tree()'),
+    'for (const child of data.children.reverse())\n    child._propagate_exit_tree()',
+  )
+  assert.strictEqual(blocks.formatCodeText('while (x) y()'), 'while (x)\n    y()')
+  assert.strictEqual(
+    blocks.formatCodeText('if (a.b(c)) d(e)'),
+    'if (a.b(c))\n    d(e)',
+  )
+  const blk = 'if (a) { done() }'
+  assert.strictEqual(blocks.formatCodeText(blk), blk, '单行块级结构不拆')
+  const loopBlk = 'for (const x of xs) { go(x) }'
+  assert.strictEqual(blocks.formatCodeText(loopBlk), loopBlk, '单行块级 for 不拆')
+  const empty = 'if (ready)'
+  assert.strictEqual(blocks.formatCodeText(empty), empty, '体为空的结构不拆')
+  check('N8 单行 if / for / while 都拆行；括号 / 块级 / 空体正确', () => {})
+}
+
+reset()
+console.log('O. 非 JS 代码块的缩进等比例归一')
+{
+  const src = ['function f() {', '  if (x) {', '    return 1', '  }', '}'].join('\n')
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(out, ['function f() {', '    if (x) {', '        return 1', '    }', '}'].join('\n'))
+  check('O1 最小缩进单位 2 → 等比例放大为 4 空格/级', () => {})
+}
+{
+  const src = ['function f() {', '    return 1', '}'].join('\n')
+  assert.strictEqual(blocks.formatCodeText(src), src)
+  check('O2 已是 4 空格/级则保持不动', () => {})
+}
+{
+  // 非整数倍的行（3 空格）原样保留，只动整数倍的
+  const src = ['a()', '  b()', '   c()'].join('\n')
+  const out = blocks.formatCodeText(src)
+  assert.strictEqual(out, ['a()', '    b()', '   c()'].join('\n'))
+  check('O3 非整数倍的缩进保持原样', () => {})
+}
+{
+  const one = ['a', ' b'].join('\n')
+  assert.strictEqual(blocks.formatCodeText(one), one)
+  const three = ['a', '   b', '      c'].join('\n')
+  assert.strictEqual(blocks.formatCodeText(three), three)
+  check('O4 单空格 / 3 空格（不整除 tabSize）不处理', () => {})
+}
+
+console.log(`\n结果：通过 ${passed} 项，失败 ${failed} 项`)
+process.exit(failed > 0 ? 1 : 0)
